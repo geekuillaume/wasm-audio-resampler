@@ -1,0 +1,8 @@
+resources/*
+build/*
+prebuilds/*
+.vscode
+.github
+deps
+scripts
+.envrc
