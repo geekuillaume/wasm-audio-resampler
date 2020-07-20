@@ -1,6 +1,6 @@
 {
   "name": "wasm-audio-resampler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "An WebAssembly implementation of Soxr audio resampling lib",
   "main": "app/index.js",
   "types": "app/index.d.ts",
