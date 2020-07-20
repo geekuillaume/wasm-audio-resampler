@@ -1,0 +1,3 @@
+[submodule "deps/soxr"]
+	path = deps/soxr
+	url = https://git.code.sf.net/p/soxr/code

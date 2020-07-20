@@ -1,0 +1,10 @@
+build
+prebuilds
+resources/*_output.pcm
+node_modules
+.vscode
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles
+scripts/dockcross*
+.envrc

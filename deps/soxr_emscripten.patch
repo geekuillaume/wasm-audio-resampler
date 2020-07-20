@@ -1,0 +1,325 @@
+From 59f66fdcc7e4761f837dda8819a6f3793086544a Mon Sep 17 00:00:00 2001
+From: Guillaume Besson <guillaume@besson.co>
+Date: Mon, 20 Jul 2020 13:45:41 +0200
+Subject: [PATCH] Fix function table for rdft to make signature available to
+ Emscripten
+
+---
+ src/cr.c      | 44 ++++++++++++++++++++++++--------------------
+ src/cr.h      |  4 ++--
+ src/fft4g32.c | 42 ++++++++++++++++++++++--------------------
+ src/pffft32.c | 32 ++++++++++++++++----------------
+ src/rdft_t.h  | 50 +++++++++++++++++++++++++++++++++++---------------
+ 5 files changed, 99 insertions(+), 73 deletions(-)
+
+diff --git a/src/cr.c b/src/cr.c
+index 4122db3..4658c52 100644
+--- a/src/cr.c
++++ b/src/cr.c
+@@ -7,6 +7,7 @@
+ #include <assert.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <stdio.h>
+
+ #include "filter.h"
+
+@@ -74,7 +75,8 @@ static void dft_stage_fn(stage_t * p, fifo_t * output_fifo)
+   int const overlap = f->num_taps - 1;
+
+   if (p->at.integer + p->L * num_in >= f->dft_length) {
+-    fn_t const * const RDFT_CB = p->rdft_cb;
++
++    rdft_cb_table const * const RDFT_CB = p->rdft_cb;
+     size_t const sizeof_real = sizeof(char) << LOG2_SIZEOF_REAL(p->core_flags);
+     div_t divd = div(f->dft_length - overlap - p->at.integer + p->L - 1, p->L);
+     real const * input = fifo_read_ptr(&p->fifo);
+@@ -120,12 +122,15 @@ static void dft_stage_fn(stage_t * p, fifo_t * output_fifo)
+           dft_out[i + 1] = 0;
+         #undef dft_out
+       }
+-      if (p->step.integer > 0)
++
++      if (p->step.integer > 0) {
+         rdft_reorder_back(f->dft_length, f->dft_backward_setup, dft_out, p->dft_scratch);
++      }
+     } else {
+       if (p->L == 1)
+         memcpy(dft_out, input, (size_t)f->dft_length * sizeof_real);
+       else {
++
+         memset(dft_out, 0, (size_t)f->dft_length * sizeof_real);
+         if (IS_FLOAT32)
+           for (j = 0, i = p->at.integer; i < f->dft_length; ++j, i += p->L)
+@@ -168,7 +173,7 @@ static void dft_stage_fn(stage_t * p, fifo_t * output_fifo)
+         memcpy(output, dft_out, (size_t)(f->dft_length >> m) * sizeof_real);
+       fifo_trim_by(output_fifo, (((1 << m) - 1) * f->dft_length + overlap) >>m);
+     }
+-    (void)RDFT_CB;
++    (rdft_cb_table const *)RDFT_CB;
+   }
+   p->input_size = (f->dft_length - p->at.integer + p->L - 1) / p->L;
+ }
+@@ -185,7 +190,7 @@ static void dft_stage_init(
+     unsigned instance, double Fp, double Fs, double Fn, double att,
+     double phase_response, stage_t * p, int L, int M, double * multiplier,
+     unsigned min_dft_size, unsigned large_dft_size, core_flags_t core_flags,
+-    fn_t const * RDFT_CB)
++    rdft_cb_table const * rdft_table)
+ {
+   dft_filter_t * f = &p->shared->dft_filter[instance];
+   int num_taps = 0, dft_length = f->dft_length, i, offset;
+@@ -201,9 +206,9 @@ static void dft_stage_init(
+     else f->post_peak = num_taps / 2;
+
+     dft_length = set_dft_length(num_taps, (int)min_dft_size, (int)large_dft_size);
+-    f->coefs = rdft_calloc((size_t)dft_length, sizeof_real);
++    f->coefs = rdft_table->calloc((size_t)dft_length, sizeof_real);
+     offset = dft_length - num_taps + 1;
+-    m = (1. / dft_length) * rdft_multiplier() * L * *multiplier;
++    m = (1. / dft_length) * rdft_table->multiplier() * L * *multiplier;
+     if (IS_FLOAT32) for (i = 0; i < num_taps; ++i)
+         ((float *)f->coefs)[(i + offset) & (dft_length - 1)] =(float)(h[i] * m);
+     else if (WITH_FLOAT64) for (i = 0; i < num_taps; ++i)
+@@ -211,22 +216,21 @@ static void dft_stage_init(
+     free(h);
+   }
+
+-  if (rdft_flags() & RDFT_IS_SIMD)
+-    p->dft_out = rdft_malloc(sizeof_real * (size_t)dft_length);
+-  if (rdft_flags() & RDFT_NEEDS_SCRATCH)
+-    p->dft_scratch = rdft_malloc(2 * sizeof_real * (size_t)dft_length);
+-
++  if (rdft_table->flags() & RDFT_IS_SIMD)
++    p->dft_out = rdft_table->malloc(sizeof_real * (size_t)dft_length);
++  if (rdft_table->flags() & RDFT_NEEDS_SCRATCH)
++    p->dft_scratch = rdft_table->malloc(2 * sizeof_real * (size_t)dft_length);
+   if (!f->dft_length) {
+-    void * coef_setup = rdft_forward_setup(dft_length);
++    void * coef_setup = rdft_table->forward_setup(dft_length);
+     int Lp = lsx_is_power_of_2(L)? L : 1;
+     int Mp = f_domain_m? M : 1;
+-    f->dft_forward_setup = rdft_forward_setup(dft_length / Lp);
+-    f->dft_backward_setup = rdft_backward_setup(dft_length / Mp);
++    f->dft_forward_setup = rdft_table->forward_setup(dft_length / Lp);
++    f->dft_backward_setup = rdft_table->backward_setup(dft_length / Mp);
+     if (Mp == 1)
+-      rdft_forward(dft_length, coef_setup, f->coefs, p->dft_scratch);
++      rdft_table->forward(dft_length, coef_setup, f->coefs, p->dft_scratch);
+     else
+-      rdft_oforward(dft_length, coef_setup, f->coefs, p->dft_scratch);
+-    rdft_delete_setup(coef_setup);
++      rdft_table->oforward(dft_length, coef_setup, f->coefs, p->dft_scratch);
++    rdft_table->delete_setup(coef_setup);
+     f->num_taps = num_taps;
+     f->dft_length = dft_length;
+     lsx_debug("fir_len=%i dft_length=%i Fp=%g Fs=%g Fn=%g att=%g %i/%i",
+@@ -235,7 +239,7 @@ static void dft_stage_init(
+   *multiplier = 1;
+   p->out_in_ratio = (double)L / M;
+   p->core_flags = core_flags;
+-  p->rdft_cb = RDFT_CB;
++  p->rdft_cb = rdft_table;
+   p->fn = dft_stage_fn;
+   p->preload = f->post_peak / L;
+   p->at.integer = f->post_peak % L;
+@@ -549,7 +553,7 @@ STATIC void _soxr_flush(rate_t * p)
+ STATIC void _soxr_close(rate_t * p)
+ {
+   if (p->stages) {
+-    fn_t const * const RDFT_CB = p->core->rdft_cb;
++    rdft_cb_table const * const RDFT_CB = p->core->rdft_cb;
+     rate_shared_t * shared = p->stages[0].shared;
+     int i;
+
+@@ -570,7 +574,7 @@ STATIC void _soxr_close(rate_t * p)
+       memset(shared, 0, sizeof(*shared));
+     }
+     free(p->stages);
+-    (void)RDFT_CB;
++    (rdft_cb_table const *)RDFT_CB;
+   }
+ }
+
+diff --git a/src/cr.h b/src/cr.h
+index d6e8637..b21a97c 100644
+--- a/src/cr.h
++++ b/src/cr.h
+@@ -104,7 +104,7 @@ typedef struct stage {
+   bool       is_input;
+
+   /* For a stage with variable (run-time generated) filter coefs: */
+-  fn_t const * rdft_cb;
++  rdft_cb_table const * rdft_cb;
+   rate_shared_t * shared;
+   unsigned   dft_filter_num; /* Which, if any, of the 2 DFT filters to use */
+   real       * dft_scratch;
+@@ -140,7 +140,7 @@ typedef struct {
+   size_t doub_firs_len;
+   stage_fn_t cubic_stage_fn;
+   poly_fir_t const * poly_firs;
+-  fn_t * rdft_cb;
++  rdft_cb_table * rdft_cb;
+ } cr_core_t;
+
+ typedef struct rate rate_t;
+diff --git a/src/fft4g32.c b/src/fft4g32.c
+index 7a31ba4..4e4912e 100644
+--- a/src/fft4g32.c
++++ b/src/fft4g32.c
+@@ -9,28 +9,30 @@
+
+ #if WITH_CR32
+ #include "rdft_t.h"
+-static void * null(void) {return 0;}
+-static void forward (int length, void * setup, double * H) {lsx_safe_rdft_f(length,  1, H); (void)setup;}
+-static void backward(int length, void * setup, double * H) {lsx_safe_rdft_f(length, -1, H); (void)setup;}
++static void * null(int u1) {(void)u1; return 0;}
++static void forward (int length, void * setup, void * H, void * scratch) {lsx_safe_rdft_f(length,  1, H); (void)setup; (void)scratch;}
++static void backward(int length, void * setup, void * H, void * scratch) {lsx_safe_rdft_f(length, -1, H); (void)setup; (void)scratch;}
+ static int multiplier(void) {return 2;}
+-static void nothing(void) {}
++static void nothing(void *u1) {(void)u1;}
++static void nothing2(int u1, void *u2, void *u3, void *u4) {(void)u1; (void)u2; (void)u3; (void)u4;}
+ static int flags(void) {return 0;}
+
+-fn_t _soxr_rdft32_cb[] = {
+-  (fn_t)null,
+-  (fn_t)null,
+-  (fn_t)nothing,
+-  (fn_t)forward,
+-  (fn_t)forward,
+-  (fn_t)backward,
+-  (fn_t)backward,
+-  (fn_t)_soxr_ordered_convolve_f,
+-  (fn_t)_soxr_ordered_partial_convolve_f,
+-  (fn_t)multiplier,
+-  (fn_t)nothing,
+-  (fn_t)malloc,
+-  (fn_t)calloc,
+-  (fn_t)free,
+-  (fn_t)flags,
++rdft_cb_table _soxr_rdft32_cb = {
++  null,
++  null,
++  nothing,
++  forward,
++  forward,
++  backward,
++  backward,
++  _soxr_ordered_convolve_f,
++  _soxr_ordered_partial_convolve_f,
++  multiplier,
++  nothing2,
++  malloc,
++  calloc,
++  free,
++  flags,
+ };
++
+ #endif
+diff --git a/src/pffft32.c b/src/pffft32.c
+index f480809..c4c8e0a 100644
+--- a/src/pffft32.c
++++ b/src/pffft32.c
+@@ -20,20 +20,20 @@ static void convolve(int length, void * setup, float * H, float const * with) {
+ static int multiplier(void) {return 1;}
+ static int flags(void) {return RDFT_NEEDS_SCRATCH;}
+
+-fn_t _soxr_rdft32_cb[] = {
+-  (fn_t)setup,
+-  (fn_t)setup,
+-  (fn_t)delete_setup,
+-  (fn_t)forward,
+-  (fn_t)oforward,
+-  (fn_t)backward,
+-  (fn_t)obackward,
+-  (fn_t)convolve,
+-  (fn_t)_soxr_ordered_partial_convolve_f,
+-  (fn_t)multiplier,
+-  (fn_t)pffft_reorder_back,
+-  (fn_t)malloc,
+-  (fn_t)calloc,
+-  (fn_t)free,
+-  (fn_t)flags,
++rdft_cb_table _soxr_rdft32_cb = {
++  setup,
++  setup,
++  delete_setup,
++  forward,
++  oforward,
++  backward,
++  obackward,
++  convolve,
++  _soxr_ordered_partial_convolve_f,
++  multiplier,
++  pffft_reorder_back,
++  malloc,
++  calloc,
++  free,
++  flags,
+ };
+diff --git a/src/rdft_t.h b/src/rdft_t.h
+index 293d9c3..26336e6 100644
+--- a/src/rdft_t.h
++++ b/src/rdft_t.h
+@@ -3,21 +3,41 @@
+
+ typedef void (* fn_t)(void);
+
+-#define rdft_forward_setup    (*(void * (*)(int))RDFT_CB[0])
+-#define rdft_backward_setup   (*(void * (*)(int))RDFT_CB[1])
+-#define rdft_delete_setup     (*(void (*)(void *))RDFT_CB[2])
+-#define rdft_forward          (*(void (*)(int, void *, void *, void *))RDFT_CB[3])
+-#define rdft_oforward         (*(void (*)(int, void *, void *, void *))RDFT_CB[4])
+-#define rdft_backward         (*(void (*)(int, void *, void *, void *))RDFT_CB[5])
+-#define rdft_obackward        (*(void (*)(int, void *, void *, void *))RDFT_CB[6])
+-#define rdft_convolve         (*(void (*)(int, void *, void *, void const *))RDFT_CB[7])
+-#define rdft_convolve_portion (*(void (*)(int, void *, void const *))RDFT_CB[8])
+-#define rdft_multiplier       (*(int (*)(void))RDFT_CB[9])
+-#define rdft_reorder_back     (*(void (*)(int, void *, void *, void *))RDFT_CB[10])
+-#define rdft_malloc           (*(void * (*)(size_t))RDFT_CB[11])
+-#define rdft_calloc           (*(void * (*)(size_t, size_t))RDFT_CB[12])
+-#define rdft_free             (*(void (*)(void *))RDFT_CB[13])
+-#define rdft_flags            (*(int (*)(void))RDFT_CB[14])
++struct rdft_cb_table {
++  void * (* forward_setup)(int);
++  void * (* backward_setup)(int);
++  void (* delete_setup)(void *);
++  void (* forward)(int, void *, void *, void *);
++  void (* oforward)(int, void *, void *, void *);
++  void (* backward)(int, void *, void *, void *);
++  void (* obackward)(int, void *, void *, void *);
++  void (* convolve)(int, void *, void *, void const *);
++  void (* convolve_portion)(int, void *, void const *);
++  int (* multiplier)(void);
++  void (* reorder_back)(int, void *, void *, void *);
++  void * (* malloc)(size_t);
++  void * (* calloc)(size_t, size_t);
++  void (* free)(void *);
++  int (* flags)(void);
++};
++
++typedef struct rdft_cb_table rdft_cb_table;
++
++#define rdft_forward_setup    RDFT_CB->forward_setup
++#define rdft_backward_setup   RDFT_CB->backward_setup
++#define rdft_delete_setup     RDFT_CB->delete_setup
++#define rdft_forward          RDFT_CB->forward
++#define rdft_oforward         RDFT_CB->oforward
++#define rdft_backward         RDFT_CB->backward
++#define rdft_obackward        RDFT_CB->obackward
++#define rdft_convolve         RDFT_CB->convolve
++#define rdft_convolve_portion RDFT_CB->convolve_portion
++#define rdft_multiplier       RDFT_CB->multiplier
++#define rdft_reorder_back     RDFT_CB->reorder_back
++#define rdft_malloc           RDFT_CB->malloc
++#define rdft_calloc           RDFT_CB->calloc
++#define rdft_free             RDFT_CB->free
++#define rdft_flags            RDFT_CB->flags
+
+ /* Flag templates: */
+ #define RDFT_IS_SIMD       1
+--
+2.27.0
+
