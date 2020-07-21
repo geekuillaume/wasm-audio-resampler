@@ -10,6 +10,14 @@ export enum SoxrDatatype {
   SOXR_INT16 = 3,
 };
 
+export enum SoxrQuality {
+  SOXR_QQ = 0,
+  SOXR_LQ = 1,
+  SOXR_MQ = 2,
+  SOXR_HQ = 4,
+  SOXR_VHQ = 6,
+}
+
 interface EmscriptenModuleOpusEncoder extends EmscriptenModule {
   _soxr_create(
     inputRate: number,
@@ -34,8 +42,10 @@ interface EmscriptenModuleOpusEncoder extends EmscriptenModule {
     ioSpecPtr: number,
     itype: number,
     otype: number,
-  ): number;
+  ): void;
+  _soxr_quality_spec(qualitySpecPtr: number, recipe: number, flags: number): void;
   _sizeof_soxr_io_spec_t(): number;
+  _sizeof_soxr_quality_spec_t(): number;
 
   getValue(ptr: number, type: string): any;
   setValue(ptr: number, value: any, type: string): any;
@@ -70,12 +80,14 @@ class SoxrResampler {
     * @param inRate frequency in Hz for the input chunk
     * @param outRate frequency in Hz for the target chunk
     * @param dataType type of the input and output data, 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+    * @param quality quality of the resampling, higher means more CPU usage, number between 0 and 6
     */
   constructor(
     public channels,
     public inRate,
     public outRate,
     public dataType = SoxrDatatype.SOXR_FLOAT32,
+    public quality = SoxrQuality.SOXR_HQ,
   ) {}
 
   /**
@@ -94,6 +106,8 @@ class SoxrResampler {
     if (!this._resamplerPtr) {
       const ioSpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_io_spec_t());
       soxrModule._soxr_io_spec(ioSpecPtr, this.dataType, this.dataType);
+      const qualitySpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_quality_spec_t());
+      soxrModule._soxr_quality_spec(qualitySpecPtr, this.quality, 0);
       const errPtr = soxrModule._malloc(4);
       this._resamplerPtr = soxrModule._soxr_create(
         this.inRate,
@@ -101,10 +115,11 @@ class SoxrResampler {
         this.channels,
         errPtr,
         ioSpecPtr,
-        0,
+        qualitySpecPtr,
         0,
       );
       soxrModule._free(ioSpecPtr);
+      soxrModule._free(qualitySpecPtr);
       const errNum = soxrModule.getValue(errPtr, 'i32');
       if (errNum !== 0) {
         const err =  new Error(soxrModule.AsciiToString(errNum));
@@ -159,7 +174,6 @@ class SoxrResampler {
     }
 
     const outSamplesPerChannelsWritten = soxrModule.getValue(this._outProcessLenPtr, 'i32');
-
     // we are copying the info in a new buffer here, we could just pass a buffer pointing to the same memory space if needed
     return Buffer.from(
       soxrModule.HEAPU8.slice(
@@ -181,15 +195,17 @@ export class SoxrResamplerTransform extends Transform {
     * @param inRate frequency in Hz for the input chunk
     * @param outRate frequency in Hz for the target chunk
     * @param dataType type of the input and output data, 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+    * @param quality quality of the resampling, higher means more CPU usage, number between 0 and 6
     */
   constructor(
     public channels,
     public inRate,
     public outRate,
     public dataType = SoxrDatatype.SOXR_FLOAT32,
+    public quality = SoxrQuality.SOXR_HQ,
   ) {
     super();
-    this.resampler = new SoxrResampler(channels, inRate, outRate, dataType);
+    this.resampler = new SoxrResampler(channels, inRate, outRate, dataType, quality);
     this.channels = channels;
     this._alignementBuffer = EMPTY_BUFFER;
   }

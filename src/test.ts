@@ -3,7 +3,7 @@ import {readFileSync, writeFileSync,createReadStream} from 'fs';
 import { performance } from 'perf_hooks'
 import path from 'path';
 
-import SoxrResampler, {SoxrResamplerTransform, SoxrDatatype} from './index';
+import SoxrResampler, {SoxrResamplerTransform, SoxrDatatype, SoxrQuality} from './index';
 
 const assert = (condition, message) => {
   if (!condition) {
@@ -12,21 +12,27 @@ const assert = (condition, message) => {
 }
 
 const audioTests = [
-  {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1},
-  {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 24000, channels: 2},
-  {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 44100, channels: 2},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 24000, channels: 2},
+  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1},
+  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1, quality: SoxrQuality.SOXR_LQ},
+  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1, quality: SoxrQuality.SOXR_MQ},
+  // {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 24000, channels: 2},
+  // {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 44100, channels: 2},
+  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_LQ},
+  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_MQ},
+  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_HQ},
+  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_VHQ},
+  // {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 24000, channels: 2},
 ];
 
 const promiseBasedTest = async () => {
   for (const audioTest of audioTests) {
-    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz`);
+    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz with quality ${audioTest.quality || 4}`);
     const resampler = new SoxrResampler(
       audioTest.channels,
       audioTest.inRate,
       audioTest.outRate,
-      SoxrDatatype.SOXR_INT16
+      SoxrDatatype.SOXR_INT16,
+      audioTest.quality,
     );
     const filename = path.parse(audioTest.inFile).name;
     const pcmData = readFileSync(audioTest.inFile);
@@ -52,13 +58,14 @@ const streamBasedTest = async () => {
   console.log('=================');
 
   for (const audioTest of audioTests) {
-    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz`);
+    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz with quality ${audioTest.quality || 4}`);
     const readFileStream = createReadStream(audioTest.inFile);
     const transformStream = new SoxrResamplerTransform(
       audioTest.channels,
       audioTest.inRate,
       audioTest.outRate,
-      SoxrDatatype.SOXR_INT16
+      SoxrDatatype.SOXR_INT16,
+      audioTest.quality,
     );
     let pcmData = Buffer.alloc(0);
     readFileStream.on('data', (d) => {
@@ -91,12 +98,13 @@ const smallChunksTest = async () => {
 
   for (const audioTest of audioTests) {
     const chunkSize = (audioTest.inRate / 100) * 2 * audioTest.channels; // simulate 100 chunks per seconds
-    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz`);
+    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz with quality ${audioTest.quality || 4}`);
     const resampler = new SoxrResampler(
       audioTest.channels,
       audioTest.inRate,
       audioTest.outRate,
-      SoxrDatatype.SOXR_INT16
+      SoxrDatatype.SOXR_INT16,
+      audioTest.quality,
     );
     const filename = path.parse(audioTest.inFile).name;
     const pcmData = readFileSync(audioTest.inFile);
@@ -104,7 +112,10 @@ const smallChunksTest = async () => {
     const start = performance.now();
     for (let i = 0; i * chunkSize < pcmData.length; i++) {
       const chunk = pcmData.slice(i * chunkSize, (i + 1) * chunkSize);
-      resampler.processChunk(chunk);
+      const res = resampler.processChunk(chunk);
+      // if (res.length !== (audioTest.outRate / 100) * 2 * audioTest.channels) {
+      //   console.log('Diff length:', res.length);
+      // }
     }
     const end = performance.now();
 
