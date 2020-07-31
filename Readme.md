@@ -13,7 +13,8 @@ await SoxrResampler.initPromise; // will be resolved once the WASM module has be
 const channels = 2; // minimum is 1, no maximum
 const inRate = 44100; // frequency in Hz for the input chunk
 const outRate = 44000; // frequency in Hz for the target chunk
-const datatype = SoxrDatatype.SOXR_INT16; // input and output datatype, can be 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+const inputDatatype = SoxrDatatype.SOXR_INT16; // input datatype, can be 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+const outputDatatype = SoxrDatatype.SOXR_FLOAT32; // output datatype, can be 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
 
 // you need a new resampler for every audio stream you want to resample
 // it keeps data from previous calls to improve the resampling
@@ -21,7 +22,8 @@ const resampler = new SoxrResampler(
   channels,
   audioTest.inRate,
   audioTest.outRate,
-  datatype.
+  inputDatatype,
+  outputDatatype
 );
 
 const pcmData = Buffer.from(/* interleaved PCM data in signed 16bits int */);

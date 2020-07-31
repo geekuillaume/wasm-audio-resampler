@@ -44,6 +44,7 @@ interface EmscriptenModuleOpusEncoder extends EmscriptenModule {
     otype: number,
   ): void;
   _soxr_quality_spec(qualitySpecPtr: number, recipe: number, flags: number): void;
+  _soxr_delay(ioSpecPtr: number): number;
   _sizeof_soxr_io_spec_t(): number;
   _sizeof_soxr_quality_spec_t(): number;
 
@@ -86,26 +87,53 @@ class SoxrResampler {
     public channels,
     public inRate,
     public outRate,
-    public dataType = SoxrDatatype.SOXR_FLOAT32,
+    public inputDataType = SoxrDatatype.SOXR_FLOAT32,
+    public outputDataType = SoxrDatatype.SOXR_FLOAT32,
     public quality = SoxrQuality.SOXR_HQ,
   ) {}
 
   /**
-    * Resample a chunk of audio.
-    * @param chunk interleaved PCM data in this.dataType type or null if flush is requested
-    */
-  processChunk(chunk: Buffer) {
+  * Returns the minimum size required for the outputBuffer from the provided input chunk
+  * @param chunk interleaved PCM data in this.inputDataType type or null if flush is requested
+  */
+  outputBufferNeededSize(chunk: Uint8Array) {
+    const delaySize = this.getDelay() * bytesPerDatatypeSample[this.outputDataType] * this.channels;
+    if (!chunk) {
+      return Math.ceil(delaySize);
+    }
+    return Math.ceil(delaySize + ((chunk.length / bytesPerDatatypeSample[this.inputDataType]) * this.outRate / this.inRate * bytesPerDatatypeSample[this.outputDataType]));
+  }
+
+  /**
+   * Returns the delay introduced by the resampler in number of output samples per channel
+   */
+  getDelay() {
+    if (!soxrModule) {
+      throw new Error('You need to wait for SoxrResampler.initPromise before calling this method');
+    }
+    if (!this._resamplerPtr) {
+      return 0
+    }
+    return soxrModule._soxr_delay(this._resamplerPtr);
+  }
+
+  /**
+  * Resample a chunk of audio.
+  * @param chunk interleaved PCM data in this.inputDataType type or null if flush is requested
+  * @param outputBuffer Uint8Array which will store the result resampled chunk in this.outputDataType type
+  */
+  processChunkInOutputBuffer(chunk: Uint8Array, outputBuffer: Uint8Array) {
     if (!soxrModule) {
       throw new Error('You need to wait for SoxrResampler.initPromise before calling this method');
     }
     // We check that we have as many chunks for each channel and that the last chunk is full (2 bytes)
-    if (chunk && chunk.length % (this.channels * bytesPerDatatypeSample[this.dataType]) !== 0) {
-      throw new Error(`Chunk length should be a multiple of channels * ${bytesPerDatatypeSample[this.dataType]} bytes`);
+    if (chunk && chunk.length % (this.channels * bytesPerDatatypeSample[this.inputDataType]) !== 0) {
+      throw new Error(`Chunk length should be a multiple of channels * ${bytesPerDatatypeSample[this.inputDataType]} bytes`);
     }
 
     if (!this._resamplerPtr) {
       const ioSpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_io_spec_t());
-      soxrModule._soxr_io_spec(ioSpecPtr, this.dataType, this.dataType);
+      soxrModule._soxr_io_spec(ioSpecPtr, this.inputDataType, this.outputDataType);
       const qualitySpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_quality_spec_t());
       soxrModule._soxr_quality_spec(qualitySpecPtr, this.quality, 0);
       const errPtr = soxrModule._malloc(4);
@@ -141,7 +169,7 @@ class SoxrResampler {
       }
 
       // Resizing the output buffer in the WASM memory space to match what we need
-      const outBufferLengthTarget = Math.ceil(chunk.length * this.outRate / this.inRate);
+      const outBufferLengthTarget = this.outputBufferNeededSize(chunk);
       if (this._outBufferSize < outBufferLengthTarget) {
         if (this._outBufferPtr !== -1) {
           soxrModule._free(this._outBufferPtr);
@@ -162,10 +190,10 @@ class SoxrResampler {
     const errPtr = soxrModule._soxr_process(
       this._resamplerPtr,
       chunk ? this._inBufferPtr : 0,
-      chunk ? chunk.length / this.channels / bytesPerDatatypeSample[this.dataType] : 0,
+      chunk ? chunk.length / this.channels / bytesPerDatatypeSample[this.inputDataType] : 0,
       this._inProcessedLenPtr,
       this._outBufferPtr,
-      this._outBufferSize / this.channels / bytesPerDatatypeSample[this.dataType],
+      this._outBufferSize / this.channels / bytesPerDatatypeSample[this.outputDataType],
       this._outProcessLenPtr,
     );
 
@@ -174,12 +202,26 @@ class SoxrResampler {
     }
 
     const outSamplesPerChannelsWritten = soxrModule.getValue(this._outProcessLenPtr, 'i32');
-    // we are copying the info in a new buffer here, we could just pass a buffer pointing to the same memory space if needed
-    return Buffer.from(
-      soxrModule.HEAPU8.slice(
-        this._outBufferPtr,
-        this._outBufferPtr + outSamplesPerChannelsWritten * this.channels * bytesPerDatatypeSample[this.dataType]
-      ).buffer);
+    const outputLength = outSamplesPerChannelsWritten * this.channels * bytesPerDatatypeSample[this.outputDataType];
+    if (outputBuffer.length < outputLength) {
+      throw new Error(`Provided outputBuffer is too small: ${outputBuffer.length} < ${outputLength}`);
+    }
+    outputBuffer.set(soxrModule.HEAPU8.subarray(
+      this._outBufferPtr,
+      this._outBufferPtr + outSamplesPerChannelsWritten * this.channels * bytesPerDatatypeSample[this.outputDataType]
+    ));
+    return outputLength;
+  }
+
+  /**
+    * Resample a chunk of audio.
+    * @param chunk interleaved PCM data in this.inputDataType type or null if flush is requested
+    * @returns a Uint8Array which contains the resampled data in this.outputDataType type
+    */
+  processChunk(chunk: Uint8Array) {
+    const outputBuffer = new Uint8Array(this.outputBufferNeededSize(chunk));
+    const resampledSize = this.processChunkInOutputBuffer(chunk, outputBuffer);
+    return outputBuffer.subarray(0, resampledSize);
   }
 }
 
@@ -194,18 +236,20 @@ export class SoxrResamplerTransform extends Transform {
     * @param channels Number of channels, minimum is 1, no maximum
     * @param inRate frequency in Hz for the input chunk
     * @param outRate frequency in Hz for the target chunk
-    * @param dataType type of the input and output data, 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+    * @param inputDataType type of the input data, 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
+    * @param outputDataType type of the output data, 0 = Float32, 1 = Float64, 2 = Int32, 3 = Int16
     * @param quality quality of the resampling, higher means more CPU usage, number between 0 and 6
     */
   constructor(
     public channels,
     public inRate,
     public outRate,
-    public dataType = SoxrDatatype.SOXR_FLOAT32,
+    public inputDataType = SoxrDatatype.SOXR_FLOAT32,
+    public outputDataType = SoxrDatatype.SOXR_FLOAT32,
     public quality = SoxrQuality.SOXR_HQ,
   ) {
     super();
-    this.resampler = new SoxrResampler(channels, inRate, outRate, dataType, quality);
+    this.resampler = new SoxrResampler(channels, inRate, outRate, inputDataType, outputDataType, quality);
     this.channels = channels;
     this._alignementBuffer = EMPTY_BUFFER;
   }
@@ -219,9 +263,9 @@ export class SoxrResamplerTransform extends Transform {
       ]);
       this._alignementBuffer = EMPTY_BUFFER;
     }
-    // Speex needs a buffer aligned to 16bits times the number of channels
+    // the resampler needs a buffer aligned to 16bits times the number of channels
     // so we keep the extraneous bytes in a buffer for next chunk
-    const extraneousBytesCount = chunkToProcess.length % (this.channels * Uint16Array.BYTES_PER_ELEMENT);
+    const extraneousBytesCount = chunkToProcess.length % (this.channels * bytesPerDatatypeSample[this.inputDataType]);
     if (extraneousBytesCount !== 0) {
       this._alignementBuffer = Buffer.from(chunkToProcess.slice(chunkToProcess.length - extraneousBytesCount));
       chunkToProcess = chunkToProcess.slice(0, chunkToProcess.length - extraneousBytesCount);

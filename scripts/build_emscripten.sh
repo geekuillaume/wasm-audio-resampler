@@ -30,6 +30,6 @@ emcc \
   -s ASSERTIONS=0 \
   -s EXPORTED_RUNTIME_METHODS="['setValue', 'getValue', 'AsciiToString']" \
   -s ENVIRONMENT=node,web \
-  -s EXPORTED_FUNCTIONS="['_malloc', '_free', '_soxr_create','_soxr_process','_soxr_delete','_soxr_io_spec','_soxr_quality_spec','_sizeof_soxr_io_spec_t','_sizeof_soxr_quality_spec_t']" \
+  -s EXPORTED_FUNCTIONS="['_malloc', '_free', '_soxr_create','_soxr_process','_soxr_delete','_soxr_io_spec','_soxr_quality_spec','_soxr_delay','_sizeof_soxr_io_spec_t','_sizeof_soxr_quality_spec_t']" \
   ./deps/soxr/src/libsoxr.a ./deps/glue.c
 
