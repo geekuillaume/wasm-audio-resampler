@@ -18,7 +18,7 @@ emmake make
 cd ../../
 
 emcc \
-  -s INITIAL_MEMORY=128MB \
+  -s INITIAL_MEMORY=8MB \
   -s ALLOW_MEMORY_GROWTH=1 \
   -O3 \
   -o src/soxr_wasm.js \
@@ -28,6 +28,8 @@ emcc \
   -s USE_ES6_IMPORT_META=0 \
   -s EXPORT_NAME="Soxr" \
   -s ASSERTIONS=0 \
+  -s NODEJS_CATCH_REJECTION=0 \
+  -s NODEJS_CATCH_EXIT=0 \
   -s EXPORTED_RUNTIME_METHODS="['setValue', 'getValue', 'AsciiToString']" \
   -s ENVIRONMENT=node,web \
   -s EXPORTED_FUNCTIONS="['_malloc', '_free', '_soxr_create','_soxr_process','_soxr_delete','_soxr_io_spec','_soxr_quality_spec','_soxr_delay','_sizeof_soxr_io_spec_t','_sizeof_soxr_quality_spec_t']" \
