@@ -13,7 +13,7 @@ declare class SoxrResampler {
     _outBufferSize: number;
     _inProcessedLenPtr: number;
     _outProcessLenPtr: number;
-    static initPromise: Promise<any>;
+    private soxrModule;
     /**
       * Create an SpeexResampler tranform stream.
       * @param channels Number of channels, minimum is 1, no maximum
@@ -23,6 +23,7 @@ declare class SoxrResampler {
       * @param quality quality of the resampling, higher means more CPU usage, number between 0 and 6
       */
     constructor(channels: any, inRate: any, outRate: any, inputDataType?: SoxrDatatype, outputDataType?: SoxrDatatype, quality?: SoxrQuality);
+    init(): Promise<void>;
     /**
     * Returns the minimum size required for the outputBuffer from the provided input chunk
     * @param chunk interleaved PCM data in this.inputDataType type or null if flush is requested

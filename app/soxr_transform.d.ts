@@ -11,6 +11,7 @@ export declare class SoxrResamplerTransform extends Transform {
     quality: SoxrQuality;
     resampler: SoxrResampler;
     _alignementBuffer: Buffer;
+    private initPromise;
     /**
       * Create an SpeexResampler instance.
       * @param channels Number of channels, minimum is 1, no maximum

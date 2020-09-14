@@ -39,6 +39,7 @@ const promiseBasedTest = async () => {
       SoxrDatatype.SOXR_INT16,
       audioTest.quality,
     );
+    await resampler.init();
     const filename = path.parse(audioTest.inFile).name;
 
     const start = performance.now();
@@ -112,6 +113,7 @@ const smallChunksTest = async () => {
       SoxrDatatype.SOXR_INT16,
       audioTest.quality,
     );
+    await resampler.init();
 
     const start = performance.now();
     for (let i = 0; i * chunkSize < audioTest.pcmData.length; i++) {
@@ -147,6 +149,7 @@ const inBufferTest = async () => {
       SoxrDatatype.SOXR_INT16,
       audioTest.quality,
     );
+    await resampler.init();
 
     const start = performance.now();
     for (let i = 0; i * chunkSize < audioTest.pcmData.length; i++) {
@@ -176,6 +179,7 @@ const typeChangeTest = async () => {
       SoxrDatatype.SOXR_FLOAT32,
       audioTest.quality,
     );
+    await resampler.init();
     const filename = path.parse(audioTest.inFile).name;
 
     const start = performance.now();
@@ -194,13 +198,15 @@ const typeChangeTest = async () => {
 
 }
 
-SoxrResampler.initPromise
-.then(() => promiseBasedTest())
-.then(() => streamBasedTest())
-.then(() => smallChunksTest())
-.then(() => inBufferTest())
-.then(() => typeChangeTest())
-.catch((e) => {
+const main = async () => {
+  await promiseBasedTest();
+  await streamBasedTest();
+  await smallChunksTest();
+  await inBufferTest();
+  await typeChangeTest();
+};
+
+main().catch((e) => {
   console.error(e);
   process.exit(1);
 })

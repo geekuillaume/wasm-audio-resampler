@@ -8,6 +8,8 @@ export class SoxrResamplerTransform extends Transform {
   resampler: SoxrResampler;
   _alignementBuffer: Buffer;
 
+  private initPromise;
+
   /**
     * Create an SpeexResampler instance.
     * @param channels Number of channels, minimum is 1, no maximum
@@ -27,6 +29,10 @@ export class SoxrResamplerTransform extends Transform {
   ) {
     super();
     this.resampler = new SoxrResampler(channels, inRate, outRate, inputDataType, outputDataType, quality);
+    this.initPromise = this.resampler.init();
+    this.initPromise.then(() => {
+      this.initPromise = null;
+    });
     this.channels = channels;
     this._alignementBuffer = EMPTY_BUFFER;
   }
@@ -48,8 +54,17 @@ export class SoxrResamplerTransform extends Transform {
       chunkToProcess = chunkToProcess.slice(0, chunkToProcess.length - extraneousBytesCount);
     }
     try {
-      const res = this.resampler.processChunk(chunkToProcess);
-      callback(null, res);
+      if (this.initPromise) {
+        this.initPromise.then(() => {
+          const res = this.resampler.processChunk(chunkToProcess);
+          callback(null, res);
+        }).catch((e) => {
+          callback(e);
+        });
+      } else {
+        const res = this.resampler.processChunk(chunkToProcess);
+        callback(null, res);
+      }
     } catch (e) {
       callback(e);
     }

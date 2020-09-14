@@ -38,12 +38,6 @@ interface EmscriptenModuleSoxr extends EmscriptenModule {
   AsciiToString(ptr: number): string;
 }
 
-const WASM_PAGE_SIZE = 65536;
-const INITIAL_INITIAL_MEMORY = 128 * 1024 * 1024;
-
-let soxrModule: EmscriptenModuleSoxr;
-let globalModulePromise = SoxrWasm().then((s) => soxrModule = s);
-
 class SoxrResampler {
   _resamplerPtr: number;
   _inBufferPtr = -1;
@@ -54,7 +48,7 @@ class SoxrResampler {
   _inProcessedLenPtr = -1;
   _outProcessLenPtr = -1;
 
-  static initPromise = globalModulePromise as Promise<any>;
+  private soxrModule: EmscriptenModuleSoxr;
 
   /**
     * Create an SpeexResampler tranform stream.
@@ -73,6 +67,10 @@ class SoxrResampler {
     public quality = SoxrQuality.SOXR_HQ,
   ) {}
 
+  async init() {
+    this.soxrModule = await SoxrWasm();
+  }
+
   /**
   * Returns the minimum size required for the outputBuffer from the provided input chunk
   * @param chunk interleaved PCM data in this.inputDataType type or null if flush is requested
@@ -89,13 +87,13 @@ class SoxrResampler {
    * Returns the delay introduced by the resampler in number of output samples per channel
    */
   getDelay() {
-    if (!soxrModule) {
+    if (!this.soxrModule) {
       throw new Error('You need to wait for SoxrResampler.initPromise before calling this method');
     }
     if (!this._resamplerPtr) {
       return 0
     }
-    return soxrModule._soxr_delay(this._resamplerPtr);
+    return this.soxrModule._soxr_delay(this._resamplerPtr);
   }
 
   /**
@@ -104,7 +102,7 @@ class SoxrResampler {
   * @param outputBuffer Uint8Array which will store the result resampled chunk in this.outputDataType type
   */
   processChunkInOutputBuffer(chunk: Uint8Array, outputBuffer: Uint8Array) {
-    if (!soxrModule) {
+    if (!this.soxrModule) {
       throw new Error('You need to wait for SoxrResampler.initPromise before calling this method');
     }
     // We check that we have as many chunks for each channel and that the last chunk is full (2 bytes)
@@ -113,12 +111,12 @@ class SoxrResampler {
     }
 
     if (!this._resamplerPtr) {
-      const ioSpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_io_spec_t());
-      soxrModule._soxr_io_spec(ioSpecPtr, this.inputDataType, this.outputDataType);
-      const qualitySpecPtr = soxrModule._malloc(soxrModule._sizeof_soxr_quality_spec_t());
-      soxrModule._soxr_quality_spec(qualitySpecPtr, this.quality, 0);
-      const errPtr = soxrModule._malloc(4);
-      this._resamplerPtr = soxrModule._soxr_create(
+      const ioSpecPtr = this.soxrModule._malloc(this.soxrModule._sizeof_soxr_io_spec_t());
+      this.soxrModule._soxr_io_spec(ioSpecPtr, this.inputDataType, this.outputDataType);
+      const qualitySpecPtr = this.soxrModule._malloc(this.soxrModule._sizeof_soxr_quality_spec_t());
+      this.soxrModule._soxr_quality_spec(qualitySpecPtr, this.quality, 0);
+      const errPtr = this.soxrModule._malloc(4);
+      this._resamplerPtr = this.soxrModule._soxr_create(
         this.inRate,
         this.outRate,
         this.channels,
@@ -127,25 +125,25 @@ class SoxrResampler {
         qualitySpecPtr,
         0,
       );
-      soxrModule._free(ioSpecPtr);
-      soxrModule._free(qualitySpecPtr);
-      const errNum = soxrModule.getValue(errPtr, 'i32');
+      this.soxrModule._free(ioSpecPtr);
+      this.soxrModule._free(qualitySpecPtr);
+      const errNum = this.soxrModule.getValue(errPtr, 'i32');
       if (errNum !== 0) {
-        const err =  new Error(soxrModule.AsciiToString(errNum));
-        soxrModule._free(errPtr);
+        const err =  new Error(this.soxrModule.AsciiToString(errNum));
+        this.soxrModule._free(errPtr);
         throw err;
       }
-      this._inProcessedLenPtr = soxrModule._malloc(Uint32Array.BYTES_PER_ELEMENT);
-      this._outProcessLenPtr = soxrModule._malloc(Uint32Array.BYTES_PER_ELEMENT);
+      this._inProcessedLenPtr = this.soxrModule._malloc(Uint32Array.BYTES_PER_ELEMENT);
+      this._outProcessLenPtr = this.soxrModule._malloc(Uint32Array.BYTES_PER_ELEMENT);
     }
 
     if (chunk) {
       // Resizing the input buffer in the WASM memory space to match what we need
       if (this._inBufferSize < chunk.length) {
         if (this._inBufferPtr !== -1) {
-          soxrModule._free(this._inBufferPtr);
+          this.soxrModule._free(this._inBufferPtr);
         }
-        this._inBufferPtr = soxrModule._malloc(chunk.length);
+        this._inBufferPtr = this.soxrModule._malloc(chunk.length);
         this._inBufferSize = chunk.length;
       }
 
@@ -153,22 +151,22 @@ class SoxrResampler {
       const outBufferLengthTarget = this.outputBufferNeededSize(chunk);
       if (this._outBufferSize < outBufferLengthTarget) {
         if (this._outBufferPtr !== -1) {
-          soxrModule._free(this._outBufferPtr);
+          this.soxrModule._free(this._outBufferPtr);
         }
-        this._outBufferPtr = soxrModule._malloc(outBufferLengthTarget);
+        this._outBufferPtr = this.soxrModule._malloc(outBufferLengthTarget);
         this._outBufferSize = outBufferLengthTarget;
       }
 
       // Copying the info from the input Buffer in the WASM memory space
-      soxrModule.HEAPU8.set(chunk, this._inBufferPtr);
+      this.soxrModule.HEAPU8.set(chunk, this._inBufferPtr);
     }
 
     // number of samples per channel in input buffer
-    soxrModule.setValue(this._inProcessedLenPtr, 0, 'i32');
+    this.soxrModule.setValue(this._inProcessedLenPtr, 0, 'i32');
 
     // number of samples per channels available in output buffer
-    soxrModule.setValue(this._outProcessLenPtr, 0, 'i32');
-    const errPtr = soxrModule._soxr_process(
+    this.soxrModule.setValue(this._outProcessLenPtr, 0, 'i32');
+    const errPtr = this.soxrModule._soxr_process(
       this._resamplerPtr,
       chunk ? this._inBufferPtr : 0,
       chunk ? chunk.length / this.channels / bytesPerDatatypeSample[this.inputDataType] : 0,
@@ -179,15 +177,15 @@ class SoxrResampler {
     );
 
     if (errPtr !== 0) {
-      throw new Error(soxrModule.AsciiToString(errPtr));
+      throw new Error(this.soxrModule.AsciiToString(errPtr));
     }
 
-    const outSamplesPerChannelsWritten = soxrModule.getValue(this._outProcessLenPtr, 'i32');
+    const outSamplesPerChannelsWritten = this.soxrModule.getValue(this._outProcessLenPtr, 'i32');
     const outputLength = outSamplesPerChannelsWritten * this.channels * bytesPerDatatypeSample[this.outputDataType];
     if (outputBuffer.length < outputLength) {
       throw new Error(`Provided outputBuffer is too small: ${outputBuffer.length} < ${outputLength}`);
     }
-    outputBuffer.set(soxrModule.HEAPU8.subarray(
+    outputBuffer.set(this.soxrModule.HEAPU8.subarray(
       this._outBufferPtr,
       this._outBufferPtr + outSamplesPerChannelsWritten * this.channels * bytesPerDatatypeSample[this.outputDataType]
     ));
