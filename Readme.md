@@ -8,8 +8,6 @@ This lib exposes the [Soxr resampler](https://sourceforge.net/projects/soxr/) to
 ```js
 import SoxrResampler, {SoxrResamplerTransform, SoxrDatatype} from 'wasm-audio-resampler';
 
-await SoxrResampler.initPromise; // will be resolved once the WASM module has been compiled, before this you cannot call the SoxrResampler.processChunk method
-
 const channels = 2; // minimum is 1, no maximum
 const inRate = 44100; // frequency in Hz for the input chunk
 const outRate = 44000; // frequency in Hz for the target chunk
@@ -25,6 +23,8 @@ const resampler = new SoxrResampler(
   inputDatatype,
   outputDatatype
 );
+
+await resampler.init();
 
 const pcmData = Buffer.from(/* interleaved PCM data in signed 16bits int */);
 const res = resampler.processChunk(pcmData);
