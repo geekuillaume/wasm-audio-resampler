@@ -1,9 +1,11 @@
-import {readFileSync, writeFileSync,createReadStream} from 'fs';
+import {writeFileSync,createReadStream} from 'fs';
 // const {promisify} = require('util');
 import { performance } from 'perf_hooks'
 import path from 'path';
+import { audioTests } from './test_utils';
 
 import SoxrResampler, {SoxrResamplerTransform, SoxrDatatype, SoxrQuality} from './index';
+import { SoxrResamplerThread } from './soxr_resampler_thread';
 
 const assert = (condition, message) => {
   if (!condition) {
@@ -11,26 +13,8 @@ const assert = (condition, message) => {
   }
 }
 
-const audioTestsDef = [
-  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1},
-  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1, quality: SoxrQuality.SOXR_LQ},
-  // {inFile: path.resolve(__dirname, `../resources/24000hz_mono_test.pcm`), inRate: 24000, outRate: 48000, channels: 1, quality: SoxrQuality.SOXR_MQ},
-  // {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 24000, channels: 2},
-  // {inFile: path.resolve(__dirname, `../resources/24000hz_test.pcm`), inRate: 24000, outRate: 44100, channels: 2},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_LQ},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_MQ},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_HQ},
-  {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 48000, channels: 2, quality: SoxrQuality.SOXR_VHQ},
-  // {inFile: path.resolve(__dirname, `../resources/44100hz_test.pcm`), inRate: 44100, outRate: 24000, channels: 2},
-];
-const audioTests = audioTestsDef.map((test) => ({
-  ...test,
-  pcmData: readFileSync(test.inFile),
-}));
-
-const promiseBasedTest = async () => {
+export const promiseBasedTest = async () => {
   for (const audioTest of audioTests) {
-    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz with quality ${audioTest.quality || 4}`);
     const resampler = new SoxrResampler(
       audioTest.channels,
       audioTest.inRate,
@@ -45,14 +29,16 @@ const promiseBasedTest = async () => {
     const start = performance.now();
     const res = Buffer.concat([resampler.processChunk(audioTest.pcmData), resampler.processChunk(null)]);
     const end = performance.now();
+    // console.log(res);
+    console.log(`Resampling file ${audioTest.inFile} with ${audioTest.channels} channel(s) from ${audioTest.inRate}Hz to ${audioTest.outRate}Hz with quality ${audioTest.quality || 4}`);
     console.log(`Resampled in ${Math.floor(end - start)}ms, factor ${(audioTest.pcmData.length / (audioTest.inRate / 1000) / 2 / audioTest.channels) / (end - start)}`);
     console.log(`Input stream: ${audioTest.pcmData.length} bytes, ${audioTest.pcmData.length / audioTest.inRate / 2 / audioTest.channels}s`);
     console.log(`Output stream: ${res.length} bytes, ${res.length / audioTest.outRate / 2 / audioTest.channels}s`);
+    console.log();
 
     const inputDuration = audioTest.pcmData.length / audioTest.inRate / 2 / audioTest.channels;
     const outputDuration = res.length / audioTest.outRate / 2 / audioTest.channels;
     assert(Math.abs(inputDuration - outputDuration) < 0.01, `Stream duration not matching target, in: ${inputDuration}s != out:${outputDuration}`);
-    console.log();
     // writeFileSync(path.resolve(__dirname, `../resources/${filename}_${audioTest.outRate}_${audioTest.quality || 7}_output.pcm`), res);
   }
 }
@@ -154,7 +140,7 @@ const inBufferTest = async () => {
     const start = performance.now();
     for (let i = 0; i * chunkSize < audioTest.pcmData.length; i++) {
       const chunk = audioTest.pcmData.slice(i * chunkSize, (i + 1) * chunkSize);
-      resampler.processChunkInOutputBuffer(chunk, outputBuffer);
+      resampler.processChunk(chunk, outputBuffer);
     }
     const end = performance.now();
 
@@ -195,7 +181,40 @@ const typeChangeTest = async () => {
     console.log();
     writeFileSync(path.resolve(__dirname, `../resources/${filename}_${audioTest.outRate}_${audioTest.quality || 7}_output.pcm`), res);
   }
+}
 
+export const parallelTest = async () => {
+  console.log('=================');
+  console.log('Parallel Test');
+  console.log('=================');
+
+  const start = performance.now();
+  const results = await Promise.all(audioTests.map(async (audioTest) => {
+    const resampler = new SoxrResamplerThread(
+      audioTest.channels,
+      audioTest.inRate,
+      audioTest.outRate,
+      SoxrDatatype.SOXR_INT16,
+      SoxrDatatype.SOXR_INT16,
+      audioTest.quality,
+    );
+    await resampler.init();
+    const filename = path.parse(audioTest.inFile).name;
+
+    const res = Buffer.concat([
+      await resampler.processChunk(audioTest.pcmData),
+      await resampler.processChunk(null)
+    ]);
+    const inputDuration = audioTest.pcmData.length / audioTest.inRate / 2 / audioTest.channels;
+    const outputDuration = res.length / audioTest.outRate / 2 / audioTest.channels;
+    assert(Math.abs(inputDuration - outputDuration) < 0.01, `Stream duration not matching target, in: ${inputDuration}s != out:${outputDuration}`);
+    resampler.destroy();
+    // writeFileSync(path.resolve(__dirname, `../resources/${filename}_${audioTest.outRate}_${audioTest.quality || 7}_output.pcm`), res);
+    return res;
+  }));
+  const end = performance.now();
+  console.log(`Resampled all ${audioTests.length} files in ${Math.floor(end - start)}ms`);
+  // console.log(results);
 }
 
 const main = async () => {
@@ -204,6 +223,7 @@ const main = async () => {
   await smallChunksTest();
   await inBufferTest();
   await typeChangeTest();
+  await parallelTest();
 };
 
 main().catch((e) => {
